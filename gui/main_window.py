@@ -1,14 +1,107 @@
 from PyQt5.QtWidgets import (QMainWindow, QPushButton, QLabel, QFileDialog, QVBoxLayout, 
-                         QHBoxLayout, QWidget, QMessageBox, QFrame, QProgressBar, QGroupBox, QGridLayout)
-from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon
+                         QHBoxLayout, QWidget, QMessageBox, QFrame, QProgressBar, QGroupBox, QGridLayout, QSizePolicy)
+from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QWheelEvent, QPainter
 from PyQt5.QtCore import Qt, QSize, QTimer
 import os
 import cv2
 from core.face_swapper import FaceSwapper
 
+class ZoomableLabel(QLabel):
+    """QLabel que permite hacer zoom con la rueda del ratón (Ctrl + rueda) y mover la imagen con drag (pan)."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet("background-color: #ffffff;")
+        self.setMinimumSize(250, 250)
+        self._zoom = 1.0
+        self._max_zoom = 4.0
+        self._min_zoom = 0.2
+        self._base_pixmap = None
+        self._offset = [0, 0]  # Desplazamiento x, y
+        self._drag_active = False
+        self._last_pos = None
+
+    def setPixmap(self, pixmap):
+        self._base_pixmap = pixmap
+        self._zoom = 1.0
+        self._offset = [0, 0]
+        self.updatePixmap()
+
+    def updatePixmap(self):
+        if self._base_pixmap:
+            size = self._base_pixmap.size()
+            w = int(size.width() * self._zoom)
+            h = int(size.height() * self._zoom)
+            scaled = self._base_pixmap.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            # Crear un QPixmap del tamaño del label para centrar y desplazar
+            label_size = self.size()
+            canvas = QPixmap(label_size)
+            canvas.fill(Qt.white)
+            painter = QPainter(canvas)
+            # Calcular posición centrada + offset
+            x = (label_size.width() - scaled.width()) // 2 + self._offset[0]
+            y = (label_size.height() - scaled.height()) // 2 + self._offset[1]
+            painter.drawPixmap(x, y, scaled)
+            painter.end()
+            super().setPixmap(canvas)
+
+    def wheelEvent(self, event: QWheelEvent):
+        if event.modifiers() == Qt.ControlModifier:
+            angle = event.angleDelta().y()
+            factor = 1.25 if angle > 0 else 0.8
+            new_zoom = self._zoom * factor
+            if self._min_zoom <= new_zoom <= self._max_zoom:
+                # Mantener el punto bajo el cursor al hacer zoom
+                if self._base_pixmap:
+                    cursor_pos = event.pos()
+                    label_size = self.size()
+                    pixmap_size = self._base_pixmap.size() * self._zoom
+                    rel_x = cursor_pos.x() - label_size.width() // 2 - self._offset[0]
+                    rel_y = cursor_pos.y() - label_size.height() // 2 - self._offset[1]
+                    scale_factor = new_zoom / self._zoom
+                    self._offset[0] = int(self._offset[0] - rel_x * (scale_factor - 1))
+                    self._offset[1] = int(self._offset[1] - rel_y * (scale_factor - 1))
+                self._zoom = new_zoom
+                self.updatePixmap()
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._zoom > 1.0:
+            self._drag_active = True
+            self._last_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_active and self._last_pos:
+            dx = event.pos().x() - self._last_pos.x()
+            dy = event.pos().y() - self._last_pos.y()
+            self._offset[0] += dx
+            self._offset[1] += dy
+            self._last_pos = event.pos()
+            self.updatePixmap()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_active = False
+            self.setCursor(Qt.ArrowCursor)
+        super().mouseReleaseEvent(event)
+
+    def resizeEvent(self, event):
+        self.updatePixmap()
+        super().resizeEvent(event)
+
+    def resetZoom(self):
+        self._zoom = 1.0
+        self._offset = [0, 0]
+        self.updatePixmap()
+
 class ImageFrame(QFrame):
     """Frame personalizado para mostrar imágenes con un título y un borde estilizado"""
-    def __init__(self, title, parent=None):
+    def __init__(self, title, parent=None, zoomable=False):
         super().__init__(parent)
         self.setFrameShape(QFrame.StyledPanel)
         self.setFrameShadow(QFrame.Raised)
@@ -37,10 +130,13 @@ class ImageFrame(QFrame):
         """)
         
         # Contenedor para la imagen
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(250, 250)
-        self.image_label.setStyleSheet("background-color: #ffffff;")
+        if zoomable:
+            self.image_label = ZoomableLabel()
+        else:
+            self.image_label = QLabel()
+            self.image_label.setAlignment(Qt.AlignCenter)
+            self.image_label.setMinimumSize(250, 250)
+            self.image_label.setStyleSheet("background-color: #ffffff;")
         
         # Texto de información
         self.info_label = QLabel("Sin imagen")
@@ -52,7 +148,8 @@ class ImageFrame(QFrame):
         self.layout.addWidget(self.info_label)
     
     def setImage(self, pixmap):
-        self.image_label.setPixmap(pixmap)
+        if hasattr(self.image_label, 'setPixmap'):
+            self.image_label.setPixmap(pixmap)
         self.info_label.setText("")
     
     def setInfo(self, text):
@@ -154,7 +251,7 @@ class MainWindow(QMainWindow):
         # Frames para las imágenes
         self.target_frame = ImageFrame("Imagen Objetivo (Cara a reemplazar)")
         self.source_frame = ImageFrame("Imagen Fuente (Cara a utilizar)")
-        self.result_frame = ImageFrame("Resultado")
+        self.result_frame = ImageFrame("Resultado", zoomable=True)
         
         # Agregar frames al grid
         images_layout.addWidget(self.target_frame, 0, 0)
@@ -174,13 +271,17 @@ class MainWindow(QMainWindow):
         swap_icon = "icons/swap.png"
         clear_icon = "icons/clear.png"
         save_icon = "icons/save.png"
-        
+        reset_icon = "icons/reset.png"
+
         # Crear botones estilizados
         self.target_btn = StyledButton("Seleccionar imagen objetivo", target_icon)
         self.source_btn = StyledButton("Seleccionar imagen fuente", source_icon)
         self.swap_btn = StyledButton("Realizar Face Swap", swap_icon)
         self.clear_btn = StyledButton("Limpiar", clear_icon)
         self.save_btn = StyledButton("Guardar resultado", save_icon)
+        self.reset_zoom_btn = StyledButton("Resetear zoom", reset_icon)
+        self.reset_zoom_btn.setEnabled(False)
+        self.reset_zoom_btn.clicked.connect(self.reset_result_zoom)
         
         # Conectar señales
         self.target_btn.clicked.connect(self.select_target_img)
@@ -199,6 +300,7 @@ class MainWindow(QMainWindow):
         buttons_layout.addWidget(self.swap_btn)
         buttons_layout.addWidget(self.clear_btn)
         buttons_layout.addWidget(self.save_btn)
+        buttons_layout.addWidget(self.reset_zoom_btn)
         
         # Barra de progreso
         self.progress_bar = QProgressBar()
@@ -242,7 +344,7 @@ class MainWindow(QMainWindow):
     
     def select_target_img(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Seleccionar imagen objetivo", "imagenes/seleccionadas", 
+            self, "Seleccionar imagen objetivo", "images/gallery", 
             "Imágenes (*.png *.jpg *.jpeg *.bmp)"
         )
         if path:
@@ -255,7 +357,7 @@ class MainWindow(QMainWindow):
 
     def select_source_img(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Seleccionar imagen fuente", "imagenes/seleccionadas", 
+            self, "Seleccionar imagen fuente", "images/gallery", 
             "Imágenes (*.png *.jpg *.jpeg *.bmp)"
         )
         if path:
@@ -290,7 +392,7 @@ class MainWindow(QMainWindow):
             nombre_objetivo = os.path.splitext(os.path.basename(self.target_img_path))[0]
             nombre_fuente = os.path.splitext(os.path.basename(self.source_img_path))[0]
             output_name = f"swap_{nombre_objetivo}_con_{nombre_fuente}.png"
-            output_path = os.path.join("imagenes", "generadas", output_name)
+            output_path = os.path.join("images", "generated", output_name)
             _, self.result_img = self.swapper.swap_faces(
                 self.target_img_path, 
                 self.source_img_path, 
@@ -305,33 +407,47 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", str(e))
     
     def show_result(self, img):
-        """Muestra la imagen resultado en el frame correspondiente"""
-        # Convertir la imagen de OpenCV a QPixmap
+        """Muestra la imagen resultado en el frame correspondiente, ocupando todo el ancho disponible sin distorsión y habilita zoom interactivo."""
+        # Convertimos a RGB y creamos el QPixmap
         rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_img.shape
         bytes_per_line = ch * w
         qimg = QImage(rgb_img.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qimg)
-        
-        # Escalar manteniendo proporciones
-        scaled_pixmap = pixmap.scaled(400, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        
-        # Mostrar en el frame de resultado
+
+        # Hacemos que el label expanda con el layout
+        self.result_frame.image_label.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+
+        # Obtenemos el ancho y alto actualmente disponibles en el label
+        available_w = self.result_frame.image_label.width()
+        available_h = self.result_frame.image_label.height()
+
+        # Escalamos el pixmap al ancho disponible, manteniendo proporción
+        scaled_pixmap = pixmap.scaled(
+            available_w,
+            available_h,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+
+        # Pintamos y actualizamos
         self.result_frame.setImage(scaled_pixmap)
-        self.result_frame.setInfo("¡Face swap completado!")
-        
-        # Actualizar UI
+        self.result_frame.setInfo("¡Face swap completado! (Ctrl + rueda para zoom)")
+
+        # Restauramos controles y barra de progreso
         self.progress_bar.setValue(100)
         QTimer.singleShot(500, lambda: self.progress_bar.setVisible(False))
-        
-        # Reactivar botones
-        self.target_btn.setEnabled(True)
-        self.source_btn.setEnabled(True)
-        self.swap_btn.setEnabled(True)
-        self.save_btn.setEnabled(True)
-        
-        # Mostrar mensaje de éxito
+        for btn in (self.target_btn, self.source_btn, self.swap_btn, self.save_btn, self.reset_zoom_btn):
+            btn.setEnabled(True)
         QMessageBox.information(self, "Éxito", "¡Face swap completado correctamente!")
+
+    def reset_result_zoom(self):
+        """Resetea el zoom de la imagen de resultado."""
+        if hasattr(self.result_frame.image_label, 'resetZoom'):
+            self.result_frame.image_label.resetZoom()
     
     def clear_all(self):
         """Limpia todas las imágenes y restablece el estado"""
@@ -347,6 +463,7 @@ class MainWindow(QMainWindow):
         # Actualizar estado de botones
         self.swap_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
+        self.reset_zoom_btn.setEnabled(False)
     
     def save_result(self):
         """Guarda la imagen resultado en un archivo seleccionado por el usuario"""
@@ -355,7 +472,7 @@ class MainWindow(QMainWindow):
             return
         
         path, _ = QFileDialog.getSaveFileName(
-            self, "Guardar imagen resultado", "imagenes/generadas", 
+            self, "Guardar imagen resultado", "images/generated", 
             "Imágenes (*.png *.jpg *.jpeg *.bmp)"
         )
         
