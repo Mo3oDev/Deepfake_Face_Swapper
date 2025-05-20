@@ -14,10 +14,12 @@ Deepfake - Face Swapper - UDEC es una aplicación de escritorio con interfaz gr�
 LastDeepFake/
 ├── core/                  # Lógica de procesamiento (face_swapper.py)
 ├── gui/                   # Interfaz gráfica (main_window.py)
-├── imagenes/
-│   ├── seleccionadas/     # Imágenes que puedes usar como fuente u objetivo
-│   └── generadas/         # Resultados de los face swaps
+├── images/
+│   ├── gallery/           # Imágenes que puedes usar como fuente u objetivo
+│   └── generated/         # Resultados de los face swaps
 ├── models/                # Modelos ONNX (NO SE INCLUYEN EN EL REPO)
+├── icons/                 # Íconos para la interfaz
+├── assets/                # Recursos para documentación (ejemplo, splash, etc.)
 ├── main.py                # Punto de entrada de la app
 ├── requirements.txt       # Dependencias
 └── README.md
@@ -42,7 +44,7 @@ LastDeepFake/
    ```
 2. Selecciona una imagen objetivo y una fuente desde la interfaz.
 3. Haz clic en "Realizar Face Swap" y espera el resultado.
-4. Las imágenes generadas se guardarán automáticamente en `imagenes/generadas/`.
+4. Las imágenes generadas se guardarán automáticamente en `images/generated/`.
 
 ## Ejemplo de resultado
 
@@ -64,9 +66,22 @@ La ruta al modelo ONNX de face swapper es genérica por defecto (`models/face_sw
 
 ## .gitignore recomendado
 ```
-imagenes/seleccionadas/
-imagenes/generadas/
+images/gallery/
+images/generated/
 models/
+DFakeEnv/
+
+models/*.onnx
+models/*.pth
+models/*.pt
+models/*.bin
+
+!models/.gitkeep
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 ```
 
 ## Créditos
