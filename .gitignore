@@ -1,0 +1,17 @@
+images/gallery/
+images/generated/
+models/
+DFakeEnv/
+
+models/*.onnx
+models/*.pth
+models/*.pt
+models/*.bin
+
+!models/.gitkeep
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
